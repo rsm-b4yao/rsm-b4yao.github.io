@@ -1,0 +1,16 @@
+---
+title: "Bowen Yao"
+image: "bowenyao.jpg"
+about:
+    template: jolla
+    links:
+        - icon: envelope
+          href: mailto:yaob08694@gmail.com
+        - icon: linkedin
+          href: https://www.linkedin.com/in/bowen-yao-0a8b86222/
+
+---
+
+This is a Quarto website.
+
+To learn more about Quarto websites visit <https://quarto.org/docs/websites>.
