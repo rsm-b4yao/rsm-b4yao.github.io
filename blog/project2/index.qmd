@@ -1,5 +1,0 @@
----
-title: "Project 2"
-date: 2025-04-23
-format: html
----
