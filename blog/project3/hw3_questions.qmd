@@ -1,0 +1,470 @@
+---
+title: "Multinomial Logit Model"
+author: "Bowen Yao"
+date: 2025/5/25
+---
+
+
+This assignment expores two methods for estimating the MNL model: (1) via Maximum Likelihood, and (2) via a Bayesian approach using a Metropolis-Hastings MCMC algorithm. 
+
+
+## 1. Likelihood for the Multi-nomial Logit (MNL) Model
+
+Suppose we have $i=1,\ldots,n$ consumers who each select exactly one product $j$ from a set of $J$ products. The outcome variable is the identity of the product chosen $y_i \in \{1, \ldots, J\}$ or equivalently a vector of $J-1$ zeros and $1$ one, where the $1$ indicates the selected product. For example, if the third product was chosen out of 3 products, then either $y=3$ or $y=(0,0,1)$ depending on how we want to represent it. Suppose also that we have a vector of data on each product $x_j$ (eg, brand, price, etc.). 
+
+We model the consumer's decision as the selection of the product that provides the most utility, and we'll specify the utility function as a linear function of the product characteristics:
+
+$$ U_{ij} = x_j'\beta + \epsilon_{ij} $$
+
+where $\epsilon_{ij}$ is an i.i.d. extreme value error term. 
+
+The choice of the i.i.d. extreme value error term leads to a closed-form expression for the probability that consumer $i$ chooses product $j$:
+
+$$ \mathbb{P}_i(j) = \frac{e^{x_j'\beta}}{\sum_{k=1}^Je^{x_k'\beta}} $$
+
+For example, if there are 3 products, the probability that consumer $i$ chooses product 3 is:
+
+$$ \mathbb{P}_i(3) = \frac{e^{x_3'\beta}}{e^{x_1'\beta} + e^{x_2'\beta} + e^{x_3'\beta}} $$
+
+A clever way to write the individual likelihood function for consumer $i$ is the product of the $J$ probabilities, each raised to the power of an indicator variable ($\delta_{ij}$) that indicates the chosen product:
+
+$$ L_i(\beta) = \prod_{j=1}^J \mathbb{P}_i(j)^{\delta_{ij}} = \mathbb{P}_i(1)^{\delta_{i1}} \times \ldots \times \mathbb{P}_i(J)^{\delta_{iJ}}$$
+
+Notice that if the consumer selected product $j=3$, then $\delta_{i3}=1$ while $\delta_{i1}=\delta_{i2}=0$ and the likelihood is:
+
+$$ L_i(\beta) = \mathbb{P}_i(1)^0 \times \mathbb{P}_i(2)^0 \times \mathbb{P}_i(3)^1 = \mathbb{P}_i(3) = \frac{e^{x_3'\beta}}{\sum_{k=1}^3e^{x_k'\beta}} $$
+
+The joint likelihood (across all consumers) is the product of the $n$ individual likelihoods:
+
+$$ L_n(\beta) = \prod_{i=1}^n L_i(\beta) = \prod_{i=1}^n \prod_{j=1}^J \mathbb{P}_i(j)^{\delta_{ij}} $$
+
+And the joint log-likelihood function is:
+
+$$ \ell_n(\beta) = \sum_{i=1}^n \sum_{j=1}^J \delta_{ij} \log(\mathbb{P}_i(j)) $$
+
+
+
+## 2. Simulate Conjoint Data
+
+We will simulate data from a conjoint experiment about video content streaming services. We elect to simulate 100 respondents, each completing 10 choice tasks, where they choose from three alternatives per task. For simplicity, there is not a "no choice" option; each simulated respondent must select one of the 3 alternatives. 
+
+Each alternative is a hypothetical streaming offer consistent of three attributes: (1) brand is either Netflix, Amazon Prime, or Hulu; (2) ads can either be part of the experience, or it can be ad-free, and (3) price per month ranges from \$4 to \$32 in increments of \$4.
+
+The part-worths (ie, preference weights or beta parameters) for the attribute levels will be 1.0 for Netflix, 0.5 for Amazon Prime (with 0 for Hulu as the reference brand); -0.8 for included adverstisements (0 for ad-free); and -0.1*price so that utility to consumer $i$ for hypothethical streaming service $j$ is 
+
+$$
+u_{ij} = (1 \times Netflix_j) + (0.5 \times Prime_j) + (-0.8*Ads_j) - 0.1\times Price_j + \varepsilon_{ij}
+$$
+
+where the variables are binary indicators and $\varepsilon$ is Type 1 Extreme Value (ie, Gumble) distributed.
+
+The following code provides the simulation of the conjoint data.
+
+:::: {.callout-note collapse="true"}
+```{python}
+import numpy as np
+import pandas as pd
+from itertools import product
+
+np.random.seed(123)
+
+brands = ["N", "P", "H"]  
+ads = ["Yes", "No"]
+prices = np.arange(8, 33, 4)  
+
+profiles = pd.DataFrame(list(product(brands, ads, prices)), columns=["brand", "ad", "price"])
+m = profiles.shape[0]
+
+brand_utils = {"N": 1.0, "P": 0.5, "H": 0.0}
+ad_utils = {"Yes": -0.8, "No": 0.0}
+price_util = lambda p: -0.1 * p
+
+n_peeps = 100
+n_tasks = 10
+n_alts = 3
+
+def simulate_respondent(pid):
+    all_tasks = []
+    for t in range(1, n_tasks + 1):
+        sampled = profiles.sample(n=n_alts).copy()
+        sampled["resp"] = pid
+        sampled["task"] = t
+
+        v = (
+            sampled["brand"].map(brand_utils) +
+            sampled["ad"].map(ad_utils) +
+            sampled["price"].apply(price_util)
+        ).round(10)
+        
+        e = -np.log(-np.log(np.random.uniform(size=n_alts)))
+        u = v + e
+
+        choice = (u == u.max()).astype(int)
+
+        sampled["choice"] = choice
+        all_tasks.append(sampled)
+    
+    return pd.concat(all_tasks, ignore_index=True)
+
+conjoint_data = pd.concat([simulate_respondent(i) for i in range(1, n_peeps + 1)], ignore_index=True)
+
+conjoint_data = conjoint_data[["resp", "task", "brand", "ad", "price", "choice"]]
+
+conjoint_data.head()
+
+```
+::::
+
+
+
+## 3. Preparing the Data for Estimation
+
+The "hard part" of the MNL likelihood function is organizing the data, as we need to keep track of 3 dimensions (consumer $i$, covariate $k$, and product $j$) instead of the typical 2 dimensions for cross-sectional regression models (consumer $i$ and covariate $k$). The fact that each task for each respondent has the same number of alternatives (3) helps.  In addition, we need to convert the categorical variables for brand and ads into binary variables.
+
+```{python}
+import pandas as pd
+
+df = pd.read_csv("conjoint_data.csv")
+
+df_encoded = pd.get_dummies(df, columns=["brand", "ad"], drop_first=True)
+
+df_encoded = df_encoded.sort_values(by=["resp", "task"]).reset_index(drop=True)
+
+df_encoded.head()
+```
+
+```{python}
+X_cols = ["brand_N", "brand_P", "ad_Yes", "price"]
+X = df_encoded[X_cols].astype(float).values
+y = df_encoded["choice"].values
+
+n_obs = df_encoded.shape[0]
+n_respondents = df_encoded["resp"].nunique()
+n_tasks = df_encoded["task"].nunique() // n_respondents
+n_alts = 3  
+```
+
+
+## 4. Estimation via Maximum Likelihood
+
+```{python}
+def mnl_log_likelihood(beta, X, y, n_alts=3):
+    beta = np.asarray(beta)
+    n_tasks = len(y) // n_alts
+
+    utilities = X @ beta
+    utilities = utilities.reshape(n_tasks, n_alts)
+    y = y.reshape(n_tasks, n_alts)
+
+    exp_u = np.exp(utilities)
+    probs = exp_u / np.sum(exp_u, axis=1, keepdims=True)
+
+    log_probs = np.log(probs)
+    chosen_log_probs = (y * log_probs).sum(axis=1)
+    return chosen_log_probs.sum()
+
+```
+
+
+```{python}
+from scipy.special import gammaln
+from scipy.optimize import minimize
+import numpy as np
+
+def neg_log_likelihood(beta, X, y, n_alts=3):
+    return -mnl_log_likelihood(beta, X, y, n_alts)
+
+beta_init = np.zeros(X.shape[1])
+
+result = minimize(
+    fun=neg_log_likelihood,
+    x0=beta_init,
+    args=(X, y, 3),
+    method='BFGS',
+    options={"disp": True}
+)
+
+beta_hat = result.x
+hessian_inv = result.hess_inv
+se = np.sqrt(np.diag(hessian_inv))
+
+z = 1.96
+ci_lower = beta_hat - z * se
+ci_upper = beta_hat + z * se
+
+param_names = ["beta_netflix", "beta_prime", "beta_ads", "beta_price"]
+mle_summary = pd.DataFrame({
+    "Coefficient": beta_hat,
+    "Std. Error": se,
+    "95% CI Lower": ci_lower,
+    "95% CI Upper": ci_upper
+}, index=param_names).round(4)
+
+print(mle_summary)
+```
+
+#### Key Insights:
+
+- **Brand Preferences**:
+  - Consumers have the strongest preference for **Netflix** (β = 0.94), followed by **Prime** (β = 0.50).
+  - Both coefficients are statistically significant indicating meaningful brand effects.
+  - **Hulu** serves as the reference brand (its effect is absorbed into the intercept).
+
+- **Ads (beta_ads = -0.732)**:
+  - Having ads significantly decreases utility.
+  - This negative effect is substantial and statistically significant, consistent with expectations that users prefer ad-free options.
+
+- **Price (beta_price = -0.0995)**:
+  - Price has a statistically significant and negative effect on utility.
+  - A one-unit increase in price decreases utility by approximately 0.1, consistent with standard economic intuition.
+
+
+## 5. Estimation via Bayesian Methods
+
+```{python}
+import numpy as np
+n_alts = 3
+n_params = X.shape[1]
+
+def mnl_log_likelihood(beta, X, y, n_alts=3):
+    beta = np.asarray(beta)
+    n_tasks = len(y) // n_alts
+    utilities = X @ beta
+    utilities = utilities.reshape(n_tasks, n_alts)
+    y = y.reshape(n_tasks, n_alts)
+    exp_u = np.exp(np.clip(utilities, -700, 700))  
+    probs = exp_u / np.sum(exp_u, axis=1, keepdims=True)
+    log_probs = np.log(probs)
+    return (y * log_probs).sum()
+
+def log_prior(beta):
+    logp = -0.5 * (beta[0:3]**2 / 5 + np.log(2*np.pi*5)).sum()
+    logp += -0.5 * (beta[3]**2 / 1 + np.log(2*np.pi*1))
+    return logp
+def log_posterior(beta, X, y):
+    return mnl_log_likelihood(beta, X, y, n_alts) + log_prior(beta)
+
+n_draws = 11000
+burn_in = 1000
+beta_samples = np.zeros((n_draws, n_params))
+
+current_beta = np.zeros(n_params)
+current_logpost = log_posterior(current_beta, X, y)
+
+proposal_sd = np.array([0.05, 0.05, 0.05, 0.005])
+
+for t in range(n_draws):
+    proposal = current_beta + np.random.normal(0, proposal_sd)
+    proposal_logpost = log_posterior(proposal, X, y)
+    
+    log_accept_ratio = proposal_logpost - current_logpost
+    if np.log(np.random.rand()) < log_accept_ratio:
+        current_beta = proposal
+        current_logpost = proposal_logpost
+    
+    beta_samples[t, :] = current_beta
+
+posterior_samples = beta_samples[burn_in:]
+
+param_names = ["beta_netflix", "beta_prime", "beta_ads", "beta_price"]
+posterior_summary = pd.DataFrame({
+    "Mean": posterior_samples.mean(axis=0),
+    "Std. Dev": posterior_samples.std(axis=0),
+    "2.5%": np.percentile(posterior_samples, 2.5, axis=0),
+    "97.5%": np.percentile(posterior_samples, 97.5, axis=0)
+}, index=param_names).round(4)
+
+print(posterior_summary)
+
+```
+
+### beta_price
+
+```{python}
+import matplotlib.pyplot as plt
+
+param_index = 3
+param_name = "beta_price"
+samples = posterior_samples[:, param_index]
+
+plt.figure(figsize=(10, 4))
+plt.plot(samples, color='blue', linewidth=0.7)
+plt.title(f"Trace Plot for {param_name}")
+plt.xlabel("Iteration")
+plt.ylabel(param_name)
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(6, 4))
+plt.hist(samples, bins=40, color='skyblue', edgecolor='black', density=True)
+plt.title(f"Posterior Distribution for {param_name}")
+plt.xlabel(param_name)
+plt.ylabel("Density")
+plt.tight_layout()
+plt.show()
+
+```
+
+### beta_ads
+
+```{python}
+import matplotlib.pyplot as plt
+
+param_index = 2
+param_name = "beta_ads"
+samples = posterior_samples[:, param_index]
+
+plt.figure(figsize=(10, 4))
+plt.plot(samples, color='blue', linewidth=0.7)
+plt.title(f"Trace Plot for {param_name}")
+plt.xlabel("Iteration")
+plt.ylabel(param_name)
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(6, 4))
+plt.hist(samples, bins=40, color='skyblue', edgecolor='black', density=True)
+plt.title(f"Posterior Distribution for {param_name}")
+plt.xlabel(param_name)
+plt.ylabel("Density")
+plt.tight_layout()
+plt.show()
+
+```
+
+#### 1. Trace Plot:
+These trace plots shows how the value of the parameter evolves across 10,000 post-burn-in Metropolis-Hastings iterations. The chain:
+
+- Mixes well, with no visible trend or drift,
+- Appears stationary and stable throughout the sampling period,
+- Suggests good convergence behavior, meaning we are sampling effectively from the target posterior distribution.
+
+#### 2. Posterior Histogram:
+These histograms show the marginal posterior distribution. The distribution is:
+
+- Unimodal and approximately normal,
+- Centered aligns with the true value used in simulation and the MLE estimate,
+
+Together, these plots provide visual validation that the MCMC sampling worked properly and that the model recovered a meaningful estimate for how price influences consumer choice.
+
+
+
+_todo: report the 4 posterior means, standard deviations, and 95% credible intervals and compare them to your results from the Maximum Likelihood approach._
+
+```{python}
+param_names = ["beta_netflix", "beta_prime", "beta_ads", "beta_price"]
+
+posterior_summary = pd.DataFrame({
+    "Posterior Mean": posterior_samples.mean(axis=0),
+    "Posterior Std. Dev": posterior_samples.std(axis=0),
+    "95% CI Lower": np.percentile(posterior_samples, 2.5, axis=0),
+    "95% CI Upper": np.percentile(posterior_samples, 97.5, axis=0)
+}, index=param_names).round(4)
+
+comparison = pd.concat([
+    mle_summary,
+    posterior_summary
+], axis=1)
+
+print(comparison)
+
+```
+
+### Comparison of MLE and Bayesian Estimates
+
+The table above shows that the Maximum Likelihood Estimates (MLE) and Bayesian posterior means are very close, but not identical.
+
+This is expected:
+- The MLE estimates are purely driven by the data, finding the parameter values that maximize the likelihood.
+- The Bayesian estimates incorporate prior beliefs, which exert a small "pull" on the posterior means — especially when data is moderate in size.
+
+Because we used weakly informative priors, the differences between MLE and posterior means are minimal, and their confidence/credible intervals overlap almost completely.
+
+These small differences **validate** our MCMC sampler and show that both estimation methods are consistent and reliable.
+
+
+
+## 6. Discussion
+
+Suppose we did not know the data was simulated, and instead treated the estimates as coming from real consumer responses in a conjoint experiment.
+
+#### Brand Preferences
+
+We observe that:
+- beta_netflix > beta_textPrime > 0 
+- Hulu is the omitted baseline (reference category)
+
+This tells us that, **on average**, consumers prefer:
+- **Netflix the most**, followed by
+- **Amazon Prime**, with
+- **Hulu as the least preferred option**
+The difference in coefficients reflects differences in **utility** (and thus choice probability) attributed to each brand. The fact that beta_Netflix > beta_Prime suggests that Netflix is **perceived as higher value or quality**, all else equal.
+
+#### Ads
+The coefficient on `ads` is **negative**, meaning people prefer ad-free experiences. This makes sense — ads typically introduce friction or reduce the quality of streaming experiences, so it's expected that `ad_Yes` reduces utility.
+
+#### Price
+The price coefficient beta_price is **clearly negative**, and statistically significant. This matches economic intuition: **as price increases, utility decreases**, and the likelihood of a product being chosen drops. This is consistent with the law of demand.
+
+#### Overall Interpretation
+The model results appear **realistic and internally consistent**:
+- Higher brand value (Netflix) and better experiences (no ads) increase choice probability
+- Higher prices reduce it
+
+### Extending to a Hierarchical (Multilevel) Model
+
+To move from the basic MNL model to a **hierarchical MNL model** , we would need to make one key change:
+
+#### Instead of assuming a single, fixed set of betas shared by all respondents...
+
+We allow each respondent i to have their own parameter vector beta_i :
+
+$$
+\beta_i \sim \mathcal{N}(\mu, \Sigma)
+$$
+Where:
+- $\mu$ is the average (population-level) preference across respondents,
+- $\Sigma$  is the covariance matrix that captures heterogeneity across people
+
+This structure reflects the reality that different consumers have different tastes — some value price more, others care more about brand or ads.
+
+
+#### Changes to Data Simulation
+
+To simulate hierarchical data, we would:
+- Draw a personalized beta_i for each respondent from a multivariate normal prior
+- Use beta_i to generate choices for that respondent across all tasks
+
+This adds **individual-level variation** into the data-generating process.
+
+
+#### Changes to Estimation
+
+To estimate a hierarchical MNL model, we would:
+- Treat the beta_i's as **latent variables**
+- Place a prior on $\mu$ and $\Sigma$
+- Use **Bayesian methods** like Gibbs sampling or Hamiltonian Monte Carlo to jointly estimate:
+  - Each person’s beta_i 
+  - The population-level parameters $\mu$, $\Sigma$
+
+This is more computationally intensive, but it provides:
+- Individual-level part-worths
+- More accurate market share predictions
+- The ability to segment respondents by preference patterns
+
+### Why Use a Hierarchical Model?
+
+In real-world conjoint analysis, hierarchical models are the standard because:
+- They reflect real consumer heterogeneity
+- They improve prediction and personalization
+- They allow more flexible and realistic simulations of market behavior
+
+
+
+
+
+
+
+
+
+
