@@ -1,0 +1,363 @@
+---
+title: "Machine Learning"
+author: "Bowen Yao"
+date: 2025/06/05
+---
+
+## 1a. K-Means
+
+```{python}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+df = pd.read_csv("palmer_penguins.csv")
+df_kmeans = df[["bill_length_mm", "flipper_length_mm"]].dropna()
+plt.figure(figsize=(6, 5))
+plt.scatter(df_kmeans["bill_length_mm"], df_kmeans["flipper_length_mm"], alpha=0.6)
+plt.xlabel("Bill Length (mm)")
+plt.ylabel("Flipper Length (mm)")
+plt.title("Penguins: Bill vs. Flipper Length")
+plt.grid(True)
+plt.show()
+```
+
+```{python}
+import numpy as np
+
+def kmeans(X, k=3, n_iters=10):
+    np.random.seed(42)
+    idx = np.random.choice(len(X), k, replace=False)
+    centroids = X[idx]
+    history = [centroids.copy()]
+
+    for _ in range(n_iters):
+        dists = np.linalg.norm(X[:, np.newaxis] - centroids, axis=2)
+        labels = np.argmin(dists, axis=1)
+        new_centroids = np.array([X[labels == j].mean(axis=0) for j in range(k)])
+        history.append(new_centroids.copy())
+        centroids = new_centroids
+
+    return centroids, labels, history
+```
+
+```{python}
+X = df_kmeans.values
+final_centroids, labels, history = kmeans(X, k=3, n_iters=10)
+
+for i, step in enumerate(history):
+    plt.figure(figsize=(6, 5))
+    plt.scatter(X[:, 0], X[:, 1], c=labels, cmap="tab10", alpha=0.5)
+    plt.scatter(step[:, 0], step[:, 1], c="red", marker="x", s=100)
+    plt.title(f"K-Means Iteration {i}")
+    plt.xlabel("Bill Length (mm)")
+    plt.ylabel("Flipper Length (mm)")
+    plt.grid(True)
+    plt.show()
+
+```
+
+```{python}
+from sklearn.cluster import KMeans
+kmeans_builtin = KMeans(n_clusters=3, n_init=10, random_state=42)
+builtin_labels = kmeans_builtin.fit_predict(X)
+plt.figure(figsize=(6, 5))
+plt.scatter(X[:, 0], X[:, 1], c=builtin_labels, cmap="tab10", alpha=0.6)
+plt.scatter(kmeans_builtin.cluster_centers_[:, 0], kmeans_builtin.cluster_centers_[:, 1], c="black", s=100, marker="x")
+plt.title("scikit-learn KMeans Clustering")
+plt.xlabel("Bill Length (mm)")
+plt.ylabel("Flipper Length (mm)")
+plt.grid(True)
+plt.show()
+
+```
+
+```{python}
+import matplotlib.pyplot as plt
+from sklearn.cluster import KMeans
+X = df_kmeans[["bill_length_mm", "flipper_length_mm"]].dropna().values
+
+def compute_wss_custom(X, k):
+    centroids, labels, _ = kmeans(X, k=k, n_iters=10)
+    wss = 0
+    for i in range(k):
+        cluster_points = X[labels == i]
+        if len(cluster_points) > 0:
+            wss += np.sum((cluster_points - centroids[i])**2)
+    return wss
+ks = list(range(1, 11))
+wss_custom = [compute_wss_custom(X, k) for k in ks]
+wss_builtin = [KMeans(n_clusters=k, n_init=10, random_state=42).fit(X).inertia_ for k in ks]
+
+plt.figure(figsize=(8, 5))
+plt.plot(ks, wss_custom, 'o--', label="WSS (Custom K-Means)", color="orange")
+plt.plot(ks, wss_builtin, 's-', label="WSS (scikit-learn KMeans)", color="blue")
+plt.xlabel("Number of Clusters (k)")
+plt.ylabel("Within-Cluster Sum of Squares (WSS)")
+plt.title("Scree Plot: Comparing Custom vs. Built-in K-Means")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+```
+
+#### K-Means Clustering Comparison
+
+We applied K-Means clustering to the Palmer Penguins dataset using two features: **bill length** and **flipper length**.
+
+##### 1. Custom Implementation vs scikit-learn
+
+The first two part of plots show the final clustering result after 10 iterations:
+
+- **Our implementation**:
+  - Uses Euclidean distance and updates centroids manually.
+  - Shows clear separation into three groups with distinct spatial patterns.
+  - Centroids converge after a few iterations.
+
+- **scikit-learn’s KMeans**:
+  - Uses optimized algorithms (`k-means++` initialization, inertia minimization).
+  - Produces nearly identical clusters and centroids compared to our implementation.
+
+The alignment between the two clustering results confirms that our custom implementation is functioning correctly.
+
+##### 2. Scree Plot: Choosing the Right Number of Clusters
+
+The third plot shows a **scree plot** of Within-Cluster Sum of Squares (WSS) for values of k  from 1 to 10:
+
+- WSS drops sharply from k = 1 to  k = 3 , then flattens.
+- This elbow at k = 3  suggests that **three clusters is the optimal choice**, aligning with known biological species labels in the dataset.
+
+- Both the **custom and built-in implementations** show similar WSS trends, though `scikit-learn` performs slightly better due to more advanced optimization.
+
+_todo: Calculate both the within-cluster-sum-of-squares and silhouette scores (you can use built-in functions to do so) and plot the results for various numbers of clusters (ie, K=2,3,...,7). What is the "right" number of clusters as suggested by these two metrics?_
+
+```{python}
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+import matplotlib.pyplot as plt
+import numpy as np
+X = df_kmeans[["bill_length_mm", "flipper_length_mm"]].dropna().values
+
+k_values = list(range(2, 8))
+
+wss_list = []
+silhouette_list = []
+
+for k in k_values:
+    kmeans = KMeans(n_clusters=k, n_init=10, random_state=42)
+    labels = kmeans.fit_predict(X)
+    wss_list.append(kmeans.inertia_)
+    silhouette_list.append(silhouette_score(X, labels))
+
+fig, ax1 = plt.subplots(figsize=(8, 5))
+
+color = 'tab:blue'
+ax1.set_xlabel('Number of Clusters (k)')
+ax1.set_ylabel('WSS', color=color)
+ax1.plot(k_values, wss_list, marker='o', linestyle='--', color=color, label="WSS")
+ax1.tick_params(axis='y', labelcolor=color)
+
+ax2 = ax1.twinx()
+color = 'tab:green'
+ax2.set_ylabel('Silhouette Score', color=color)
+ax2.plot(k_values, silhouette_list, marker='s', linestyle='-', color=color, label="Silhouette")
+ax2.tick_params(axis='y', labelcolor=color)
+
+plt.title("WSS and Silhouette Score for Varying k")
+fig.tight_layout()
+plt.show()
+
+
+```
+
+### Choosing the Number of Clusters (k): WSS and Silhouette Score
+
+To determine the optimal number of clusters for K-means, we evaluated two key metrics across \( k = 2 \) to \( k = 7 \):
+
+#### 1. Within-Cluster Sum of Squares (WSS)
+- WSS decreases as \( k \) increases, which is expected — more clusters reduce internal variance.
+- The largest drop occurs between \( k = 2 \) and \( k = 3 \), with diminishing returns afterward.
+- This forms a classic "elbow" at **\( k = 3 \)**, suggesting it as a natural choice.
+
+#### 2. Silhouette Score
+- The silhouette score measures how well-separated the clusters are.
+- It **peaks at \( k = 2 \)** and drops steadily from \( k = 3 \) onward.
+- This means 2 clusters yield the best-defined separation, but the drop between \( k = 2 \) and \( k = 3 \) is not steep, and scores remain reasonably high up to \( k = 4 \).
+
+#### Final Assessment
+- **WSS favors \( k = 3 \)** as the optimal trade-off point (elbow method),
+- **Silhouette score slightly favors \( k = 2 \)** but still supports \( k = 3 \) as a good solution.
+
+Considering both metrics and domain knowledge (e.g., the Palmer Penguins dataset has three known species), **\( k = 3 \)** is a justified and interpretable choice.
+
+
+
+## 2a. K Nearest Neighbors
+
+
+```{python}
+import numpy as np
+import pandas as pd
+
+np.random.seed(42)
+n = 100
+x1 = np.random.uniform(-3, 3, n)
+x2 = np.random.uniform(-3, 3, n)
+boundary = np.sin(4 * x1) + x1
+y = (x2 > boundary).astype(int)  
+
+dat = pd.DataFrame({'x1': x1, 'x2': x2, 'y': y})
+dat['y'] = dat['y'].astype('category') 
+
+dat.head()
+```
+
+```{python}
+import matplotlib.pyplot as plt
+import numpy as np
+
+plt.figure(figsize=(7, 5))
+scatter = plt.scatter(dat['x1'], dat['x2'], c=dat['y'].cat.codes, cmap='bwr', edgecolor='k', alpha=0.8)
+
+x1_vals = np.linspace(-3, 3, 300)
+boundary_vals = np.sin(4 * x1_vals) + x1_vals
+plt.plot(x1_vals, boundary_vals, color='black', linestyle='--', label='Boundary: sin(4x1) + x1')
+
+plt.xlabel("x1")
+plt.ylabel("x2")
+plt.title("Synthetic Classification Dataset")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+```
+
+### Visualizing the Synthetic Classification Dataset
+
+The scatter plot above shows the synthetic data generated for evaluating the K-Nearest Neighbors (KNN) classifier.
+
+- The **horizontal axis (x1)** and **vertical axis (x2)** are features drawn uniformly at random between –3 and +3.
+- The **color** of each point represents the **class label** (y), where:
+  - **Red** indicates class 1 (above the boundary)
+  - **Blue** indicates class 0 (below the boundary)
+
+
+This boundary is **nonlinear and oscillates**, creating a complex decision surface. Class 1 is assigned to points **above the boundary**, and Class 0 to points **below it**.
+
+This dataset is useful for evaluating classification models like KNN that are capable of capturing flexible, non-linear boundaries.
+
+
+### test dataset with 100 points, using the same code as above but with a different seed.
+
+```{python}
+np.random.seed(2024)
+n_test = 100
+x1_test = np.random.uniform(-3, 3, n_test)
+x2_test = np.random.uniform(-3, 3, n_test)
+boundary_test = np.sin(4 * x1_test) + x1_test
+y_test = (x2_test > boundary_test).astype(int)
+test_data = pd.DataFrame({'x1': x1_test, 'x2': x2_test, 'y': y_test})
+test_data.head()
+```
+
+
+
+### implement KNN by hand. Check work with a built-in function 
+
+```{python}
+from collections import Counter
+
+def knn_predict(X_train, y_train, X_test, k=5):
+    predictions = []
+
+    for x in X_test:
+        distances = np.sqrt(np.sum((X_train - x) ** 2, axis=1))
+        nearest_indices = np.argsort(distances)[:k]
+        nearest_labels = y_train[nearest_indices]
+        most_common = Counter(nearest_labels).most_common(1)[0][0]
+        predictions.append(most_common)
+
+    return np.array(predictions)
+```
+
+```{python}
+X_train = dat[["x1", "x2"]].values
+y_train = dat["y"].cat.codes.values  
+
+X_test = test_data[["x1", "x2"]].values
+y_test = test_data["y"].values  
+
+y_pred_custom = knn_predict(X_train, y_train, X_test, k=5)
+
+```
+
+```{python}
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import accuracy_score
+
+knn = KNeighborsClassifier(n_neighbors=5)
+knn.fit(X_train, y_train)
+y_pred_sklearn = knn.predict(X_test)
+
+acc_custom = accuracy_score(y_test, y_pred_custom)
+acc_sklearn = accuracy_score(y_test, y_pred_sklearn)
+
+print(f"Accuracy (Custom KNN):   {acc_custom:.3f}")
+print(f"Accuracy (scikit-learn): {acc_sklearn:.3f}")
+
+```
+
+
+### KNN Classification: Custom vs Built-in
+
+We implemented the K-Nearest Neighbors (KNN) algorithm from scratch, using Euclidean distance to find the closest training examples and majority voting for prediction.
+
+To validate our implementation, we compared it to scikit-learn's built-in `KNeighborsClassifier` with the same  k = 5 . Both methods gave  identical predictions and accuracy scores on the test dataset, confirming the correctness of our custom code.
+
+### What is the optimal value of k as suggested by your plot?_ 
+
+```{python}
+from sklearn.metrics import accuracy_score
+import matplotlib.pyplot as plt
+
+k_range = range(1, 31)
+accuracies = []
+
+for k in k_range:
+    y_pred_k = knn_predict(X_train, y_train, X_test, k=k)
+    acc = accuracy_score(y_test, y_pred_k)
+    accuracies.append(acc)
+
+plt.figure(figsize=(8, 5))
+plt.plot(k_range, np.array(accuracies) * 100, marker='o')
+plt.title("KNN Accuracy on Test Set (k = 1 to 30)")
+plt.xlabel("Number of Neighbors (k)")
+plt.ylabel("Accuracy (%)")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+```
+
+
+### KNN Accuracy vs. Number of Neighbors (k)
+
+The plot above shows the test set classification accuracy of our custom KNN classifier as we vary  k  from 1 to 30.
+
+#### Key Observations:
+- Accuracy is highest at k = 1 and  k = 2 , reaching **92%**.
+- As k  increases, accuracy **fluctuates slightly** but generally **declines** and stabilizes around 88–90%.
+- There is a noticeable dip in accuracy at  k = 23 , the lowest point in the range.
+
+#### Optimal k :
+- Although both  k = 1  and k = 2 achieve the highest accuracy (92%), **k = 2 ** may be preferred to slightly reduce overfitting.
+- Values of  k  between **3 and 10** also perform well, making them viable alternatives.
+
+#### Conclusion:
+Choosing  k = 2  offers the best balance between **accuracy and generalization** for this dataset. Very low  k  (e.g., 1) may overfit, while higher values begin to underfit or introduce more bias.
+
+
+
+
+
